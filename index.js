@@ -25,7 +25,8 @@ const CONFIG = {
   ROL_AVISOS:          '1477748637202382888',
   ROL_DIRECTOS:        '1477748975603023873',
 
-  TESTER_ROLE_ID:      '1483296004903141507', // Colíder PvP — solo se menciona en solicitudes PvP
+  COLIDER_PVP_ID:      '1483296004903141507', // Colíder PvP — puede ver, reclamar y cerrar tickets, pero NO aceptar/rechazar
+  TESTER_ROLE_ID:      '1480750004309332040', // Tester PvP — recibe mención cuando llega una solicitud PvP
 
   CANAL_INICIAL:       '1476978880672956428',
   CANAL_AVISOS:        '1462533102130958437',
@@ -66,9 +67,28 @@ const msgTracker   = new Map();   // anti-spam tracker
 // Guarda la especialidad elegida por cada usuario mientras llena el formulario
 // clave: userId  →  valor: string de especialidad
 const specialityMap = new Map();
-// Guarda los datos del formulario por canal de ticket para usarlos al aceptar
-// clave: channelId  →  valor: { userId, datos, especialidad, experiencia, disponibilidad, microfono, esPvP }
-const formularioMap = new Map();
+// Formularios persistentes en disco — sobreviven reinicios del bot
+// Se guarda en formularios.json al recibir cada formulario y se elimina al aceptar/rechazar/cerrar
+const FORMULARIOS_PATH = './formularios.json';
+
+function cargarFormularios() {
+  try {
+    const raw = fs.readFileSync(FORMULARIOS_PATH, 'utf8');
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch {
+    return new Map(); // archivo no existe aún o está vacío
+  }
+}
+
+function guardarFormularios(map) {
+  try {
+    fs.writeFileSync(FORMULARIOS_PATH, JSON.stringify(Object.fromEntries(map), null, 2));
+  } catch (err) {
+    console.error('❌ Error guardando formularios.json:', err.message);
+  }
+}
+
+const formularioMap = cargarFormularios();
 
 // ============================================================
 //  HELPERS
@@ -91,7 +111,7 @@ function esStaffTickets(member) {
   return (
     esStaff(member) ||
     member.roles.cache.has(CONFIG.STAFF_TICKETS_ID) ||
-    member.roles.cache.has(CONFIG.TESTER_ROLE_ID)   // Colíder PvP puede reclamar y cerrar tickets
+    member.roles.cache.has(CONFIG.COLIDER_PVP_ID)   // Colíder PvP puede reclamar y cerrar tickets
   );
 }
 
@@ -655,8 +675,8 @@ client.on(Events.InteractionCreate, async (interaction) => {
       embeds:  [embed],
     }).catch(() => {});
 
-    // Guardar datos del formulario indexados por canal de ticket
-    // para recuperarlos cuando el Staff presione "Aceptar"
+    // Guardar datos del formulario — persistido en formularios.json
+    // para que sobreviva reinicios del bot antes de que el Staff acepte
     formularioMap.set(interaction.channel.id, {
       userId:        interaction.user.id,
       userTag:       interaction.user.tag,
@@ -667,8 +687,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
       disponibilidad,
       microfono,
       esPvP,
-      aceptadoPor:   null, // se rellena al aceptar
+      aceptadoPor:   null,
     });
+    guardarFormularios(formularioMap);
 
     return interaction.reply({
       content: '✅ Tu solicitud fue enviada. El Staff la revisará pronto.',
@@ -1300,7 +1321,7 @@ if (interaction.customId === 'crear_ticket') {
       { id: interaction.user.id,     allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
       { id: CONFIG.STAFF_ROLE_ID,    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
       { id: CONFIG.STAFF_TICKETS_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-      { id: CONFIG.TESTER_ROLE_ID,   allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }, // Colíder PvP — ve y participa, pero no acepta/rechaza
+      { id: CONFIG.COLIDER_PVP_ID,   allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }, // Colíder PvP — ve y participa, pero no acepta/rechaza
       { id: client.user.id,          allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
     ],
   });
@@ -1441,6 +1462,7 @@ if (interaction.customId === 'crear_ticket') {
       }
 
       formularioMap.delete(canalTicket.id);
+      guardarFormularios(formularioMap);
       await interaction.reply({ content: '✅ **ACEPTADO.** Rol de clan asignado y rol de espera removido. Cerrando ticket en 15s...' });
     } else {
       const embedRechazo = new EmbedBuilder()
@@ -1459,6 +1481,7 @@ if (interaction.customId === 'crear_ticket') {
 
       if (targetMember) await targetMember.send({ embeds: [embedRechazo] }).catch(() => {});
       formularioMap.delete(canalTicket.id);
+      guardarFormularios(formularioMap);
       await interaction.reply({ content: '❌ **RECHAZADO.** DM enviado. Cerrando ticket en 15s...' });
     }
 
@@ -1471,7 +1494,8 @@ if (interaction.customId === 'crear_ticket') {
   // Botón: Cerrar ticket
   if (interaction.customId === 'cerrar_ticket') {
     if (!esStaffTickets(interaction.member)) return sinPermisos(interaction);
-    formularioMap.delete(interaction.channel.id); // limpiar datos del formulario
+    formularioMap.delete(interaction.channel.id);
+    guardarFormularios(formularioMap);
     await interaction.reply({ content: '🔒 Cerrando ticket...' });
     setTimeout(() => interaction.channel.delete().catch(() => {}), 3000);
   }
